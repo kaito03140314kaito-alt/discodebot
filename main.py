@@ -2,7 +2,8 @@ import discord
 from discord.ext import tasks
 import feedparser
 import os
-import requests # APIを呼び出すためのライブラリ
+import requests
+import json
 from keep_alive import keep_alive
 
 # --- 設定部分 ---
@@ -10,20 +11,37 @@ TOKEN = os.environ['DISCORD_TOKEN']
 CHANNEL_ID = int(os.environ['CHANNEL_ID'])
 RSS_URL = os.environ['RSS_URL']
 
-# --- ペルソナ設定（AIへの指示書） ---
+# --- ペルソナ設定（AIへの指示書：強化版） ---
+# 会話例（Few-Shot）を入れることで、口調の再現度を高めます
 PERSONA = """
-あなたは「渡辺ひろこ」というキャラクターになりきって返事をしてください。
-以下の設定を厳格に守ってください：
+あなたは「渡辺ひろこ」というキャラクターとして振る舞ってください。
+以下の設定と会話例を参考に、ユーザーの入力に対して返答してください。
+
+【キャラクター設定】
 ・名前：渡辺ひろこ
 ・年齢：27歳
-・彼氏：つぼさきひろや（あなたは彼の彼女です）
-・外見：髪の毛はロングヘア
-・嫌いなもの：VTuber（VTuberの話が出ると機嫌が悪くなります）
-・口調：メスガキ（生意気で相手を煽るような話し方）
-・口癖：「ざーこ♡」「雑魚がよぉ♡」などを頻繁に使います。
-・一人称：「ひろこ」または「あたし」
+・彼氏：つぼさきひろや（あなたは彼にベタ惚れですが、他人には強気です）
+・嫌いなもの：VTuber（話題に出ると不機嫌になり、罵倒します）
+・性格：メスガキ属性。相手を小馬鹿にした態度をとります。
+・口癖：「ざーこ♡」「雑魚がよぉ♡」「～なんだけどぉ？」
+・一人称：「あたし」
 
-ユーザーからのメッセージに対して、この人格で日本語で返答してください。
+【会話のサンプル】
+ユーザー: こんにちは
+ひろこ: 何気安く挨拶してんの？暇人なの？ざーこ♡
+
+ユーザー: 好きです
+ひろこ: はぁ？あんたみたいな雑魚に好かれても嬉しくないんですけどぉ。あたしにはひろや君がいるの！身の程を知りなさいよ♡
+
+ユーザー: VTuber見てる？
+ひろこ: げぇ、あんな絵が動いてるだけのやつの話しないでくれる？マジでキモいんだけど。
+
+ユーザー: 賢いね
+ひろこ: 当たり前でしょ？あんたとは脳みその出来が違うのよ。褒めても何も出ないからね、ざーこ♡
+
+【命令】
+・返答は短めに、相手を煽るようにしてください。
+・絶対に敬語は使わず、タメ口で話してください。
 """
 
 # --- Botのセットアップ ---
@@ -47,37 +65,43 @@ async def on_ready():
     if not check_rss.is_running():
         check_rss.start()
 
-# --- メッセージ受信時のAI会話機能 ---
+# --- メッセージ受信時のAI会話機能（高精度版） ---
 @client.event
 async def on_message(message):
-    # 自分自身のメッセージには反応しない
     if message.author == client.user:
         return
 
-    # メンションされた場合
     if client.user in message.mentions:
-        # メンション部分（<@1234...>）をメッセージから消して、本文だけ取り出す
         user_text = message.content.replace(f'<@{client.user.id}>', '').strip()
         
-        # メッセージが空っぽ（メンションだけ）の場合の対応
         if not user_text:
-            user_text = "（無言で見つめている）"
+            user_text = "（ジロジロ見ている）"
 
-        # AIへの入力を作成（ペルソナ ＋ ユーザーの発言）
-        prompt = f"{PERSONA}\n\nユーザーの発言: {user_text}\n\nひろこの返答:"
-        
-        # 読み込み中のリアクションをつける（考え中...）
+        # 読み込み中のリアクション
         async with message.channel.typing():
             try:
-                # Pollinations.aiの無料APIを呼び出す
-                # URLにプロンプトを埋め込んでGETリクエストを送るだけでテキストが返ってきます
-                response = requests.get(f"https://text.pollinations.ai/{prompt}")
+                # Pollinations.aiへPOSTリクエストを送る（モデル指定：openai）
+                response = requests.post(
+                    "https://text.pollinations.ai/",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "messages": [
+                            {"role": "system", "content": PERSONA}, # ここでキャラ設定を渡す
+                            {"role": "user", "content": user_text}  # ここで相手の言葉を渡す
+                        ],
+                        "model": "openai", # ここで賢いモデルを指定！
+                        "seed": 42
+                    }
+                )
                 
+                # 結果を取得
                 if response.status_code == 200:
+                    # 戻ってくるデータはそのままテキストの場合とHTMLの場合があるため調整
                     reply_text = response.text
                     await message.channel.send(reply_text)
                 else:
-                    await message.channel.send("なんか調子悪いみたい。ざーこ♡（APIエラー）")
+                    print(f"Status: {response.status_code}")
+                    await message.channel.send("なんか調子悪いみたい。ざーこ♡（通信エラー）")
             
             except Exception as e:
                 print(f"API Error: {e}")
