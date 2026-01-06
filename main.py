@@ -87,11 +87,11 @@ async def on_message(message):
                     await message.channel.send(reply_text)
                 else:
                     print(f"Status: {response.status_code}")
-                    await message.channel.send("なんか調子悪いみたい。ざーこ♡（通信エラー）")
+                    await message.channel.send("なんか調子悪いみたい。（通信エラー）")
             
             except Exception as e:
                 print(f"API Error: {e}")
-                await message.channel.send("エラーでちゃった。使えないなぁ♡")
+                await message.channel.send("エラーでちゃった。使えないなぁ♡(APIエラー)")
 
 # --- RSS監視ループ ---
 @tasks.loop(minutes=5)
@@ -117,4 +117,5 @@ async def check_rss():
 
 keep_alive()
 client.run(TOKEN)
+
 
