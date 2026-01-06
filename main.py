@@ -4,12 +4,15 @@ import feedparser
 import os
 from keep_alive import keep_alive
 
-# 環境変数から設定を読み込み
+# --- 設定部分 ---
 TOKEN = os.environ['DISCORD_TOKEN']
 CHANNEL_ID = int(os.environ['CHANNEL_ID'])
 RSS_URL = os.environ['RSS_URL']
 
+# --- Botのセットアップ ---
 intents = discord.Intents.default()
+# 【重要】メッセージの中身やメンションを読み取る許可をONにする
+intents.message_content = True 
 client = discord.Client(intents=intents)
 
 last_link = None
@@ -26,9 +29,23 @@ async def on_ready():
     except Exception as e:
         print(f"初期読み込みエラー: {e}")
     
-    check_rss.start()
+    # ループが既に回っていなければ開始
+    if not check_rss.is_running():
+        check_rss.start()
 
-@tasks.loop(minutes=10) # 10分おきにチェック
+# --- 【追加】メンションされたら返事をする機能 ---
+@client.event
+async def on_message(message):
+    # 自分自身（Bot）のメッセージには反応しない（無限ループ防止）
+    if message.author == client.user:
+        return
+
+    # メッセージの中に「自分へのメンション」が含まれているかチェック
+    if client.user in message.mentions:
+        await message.channel.send("私はひろやの彼女ひろこよ")
+
+# --- RSS監視ループ ---
+@tasks.loop(minutes=5) # 5分おきにチェック
 async def check_rss():
     global last_link
     channel = client.get_channel(CHANNEL_ID)
