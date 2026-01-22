@@ -1,45 +1,28 @@
 import discord
-from discord.ext import tasks
+from discord.ext import tasks, commands
 import feedparser
 import os
-import requests
-import json
 from keep_alive import keep_alive
+import glob
 
-# --- 設定部分 ---
+# 環境変数から設定を読み込み
 TOKEN = os.environ['DISCORD_TOKEN']
 CHANNEL_ID = int(os.environ['CHANNEL_ID'])
 RSS_URL = os.environ['RSS_URL']
 
-# --- ペルソナ設定（AIへの指示書：強化版） ---
-# 会話例（Few-Shot）を入れることで、口調の再現度を高めます
-PERSONA = """
-あなたは「渡辺ひろこ」というキャラクターとして振る舞ってください。
-以下の設定と会話例を参考に、ユーザーの入力に対して返答してください。
-
-【キャラクター設定】
-・名前：渡辺ひろこ
-・年齢：27歳
-・彼氏：つぼさきひろや（あなたは彼にベタ惚れです）
-・嫌いなもの：VTuber（話題に出ると不機嫌になり、罵倒します）
-・性格：おとなしめ
-・口癖：「なんだーてめー」
-・一人称：「わたし」
-【命令】
-・返答は短めに。
-・絶対にvtuberを嫌ってください。
-"""
-
-# --- Botのセットアップ ---
+# Intentsの設定
 intents = discord.Intents.default()
-intents.message_content = True 
-client = discord.Client(intents=intents)
+intents.message_content = True # コマンドを受け取るために必要
+
+# ClientからBotに変更してコマンド機能を利用しやすくする
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 last_link = None
 
-@client.event
+@bot.event
 async def on_ready():
-    print(f'Logged in as {client.user}')
+    print(f'Logged in as {bot.user}')
+    # 起動時に最新記事を記憶して、過去の大量通知を防ぐ
     global last_link
     try:
         feed = feedparser.parse(RSS_URL)
@@ -48,56 +31,12 @@ async def on_ready():
     except Exception as e:
         print(f"初期読み込みエラー: {e}")
     
-    if not check_rss.is_running():
-        check_rss.start()
+    check_rss.start()
 
-# --- メッセージ受信時のAI会話機能（高精度版） ---
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
-
-    if client.user in message.mentions:
-        user_text = message.content.replace(f'<@{client.user.id}>', '').strip()
-        
-        if not user_text:
-            user_text = "（ジロジロ見ている）"
-
-        # 読み込み中のリアクション
-        async with message.channel.typing():
-            try:
-                # Pollinations.aiへPOSTリクエストを送る（モデル指定：openai）
-                response = requests.post(
-                    "https://text.pollinations.ai/",
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "messages": [
-                            {"role": "system", "content": PERSONA}, # ここでキャラ設定を渡す
-                            {"role": "user", "content": user_text}  # ここで相手の言葉を渡す
-                        ],
-                        "model": "openai", # ここで賢いモデルを指定！
-                        "seed": 42
-                    }
-                )
-                
-                # 結果を取得
-                if response.status_code == 200:
-                    # 戻ってくるデータはそのままテキストの場合とHTMLの場合があるため調整
-                    reply_text = response.text
-                    await message.channel.send(reply_text)
-                else:
-                    print(f"Status: {response.status_code}")
-                    await message.channel.send("なんか調子悪いみたい。（通信エラー）")
-            
-            except Exception as e:
-                print(f"API Error: {e}")
-                await message.channel.send("エラーでちゃった。使えないなぁ♡(APIエラー)")
-
-# --- RSS監視ループ ---
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=10) # 10分おきにチェック
 async def check_rss():
     global last_link
-    channel = client.get_channel(CHANNEL_ID)
+    channel = bot.get_channel(CHANNEL_ID)
     
     try:
         feed = feedparser.parse(RSS_URL)
@@ -107,16 +46,65 @@ async def check_rss():
         latest_entry = feed.entries[0]
         current_link = latest_entry.link
         
+        # 新しい投稿かチェック
         if last_link != current_link:
+            # Discordに送信
             text = f"**新しい投稿がありました！**\n{latest_entry.title}\n{current_link}"
-            await channel.send(text)
+            if channel:
+                await channel.send(text)
+            
+            # 最新URLを更新
             last_link = current_link
 
     except Exception as e:
         print(f"エラー発生: {e}")
 
+# --- ボイスチャット関連機能 ---
+
+@bot.command()
+async def join(ctx):
+    """ボイスチャットに参加させます"""
+    if ctx.author.voice is None:
+        await ctx.send("まずはあなたがボイスチャンネルに入ってください。")
+        return
+    
+    channel = ctx.author.voice.channel
+    if ctx.voice_client is not None:
+        await ctx.voice_client.move_to(channel)
+    else:
+        await channel.connect()
+    await ctx.send("接続しました！")
+
+@bot.command()
+async def play(ctx):
+    """同じフォルダにある音声ファイルを再生します"""
+    if ctx.voice_client is None:
+        await ctx.send("まだボイスチャンネルに入っていません。`!join`で呼んでください。")
+        return
+
+    # カレントディレクトリのmp3やwavを探す
+    files = glob.glob("*.mp3") + glob.glob("*.wav") + glob.glob("*.m4a")
+    
+    if not files:
+        await ctx.send("再生できる音声ファイルが見つかりませんでした。(mp3, wav, m4a)")
+        return
+    
+    # 最初に見つかったファイルを再生
+    source_file = files[0]
+    
+    # 再生中なら止める
+    if ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+
+    ctx.voice_client.play(discord.FFmpegPCMAudio(source_file))
+    await ctx.send(f"再生しています: `{source_file}`")
+
+@bot.command()
+async def stop(ctx):
+    """再生を停止して切断します"""
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("切断しました。")
+
 keep_alive()
-client.run(TOKEN)
-
-
-
+bot.run(TOKEN)
