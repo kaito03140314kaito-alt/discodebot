@@ -98,6 +98,12 @@ async def play(ctx, url: str = None):
             'noplaylist': True,
             'quiet': True,
         }
+
+        # cookies.txtが存在するか確認して追加
+        if os.path.exists('cookies.txt'):
+            ydl_opts['cookiefile'] = 'cookies.txt'
+        else:
+            print("注意: cookies.txtが見つかりません。YouTubeの再生に失敗する可能性があります。")
         
         # FFmpegのオプション（ストリーミング用）
         ffmpeg_options = {
@@ -116,7 +122,11 @@ async def play(ctx, url: str = None):
             await ctx.send(f"再生しています: **{title}**")
             
         except Exception as e:
-            await ctx.send(f"エラーが発生しました: {e}")
+            error_message = str(e)
+            if "Sign in to confirm" in error_message:
+                 await ctx.send(f"エラー: YouTubeの認証が必要です。`cookies.txt`が正しく配置されているか確認してください。\n詳細: {e}")
+            else:
+                await ctx.send(f"エラーが発生しました: {e}")
             print(f"Play Error: {e}")
             
     else:
