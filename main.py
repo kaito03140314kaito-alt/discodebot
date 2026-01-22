@@ -4,6 +4,7 @@ import feedparser
 import os
 from keep_alive import keep_alive
 import glob
+import requests
 
 # 環境変数から設定を読み込み
 TOKEN = os.environ['DISCORD_TOKEN']
@@ -105,6 +106,41 @@ async def stop(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
         await ctx.send("切断しました。")
+
+@bot.event
+async def on_message(message):
+    # Bot自身のメッセージは無視
+    if message.author.bot:
+        return
+
+    # メンションされたらPollinations APIを使ってAI返信
+    if bot.user in message.mentions:
+        # メッセージ本文からメンション部分を除去
+        content = message.content.replace(f'<@!{bot.user.id}>', '').replace(f'<@{bot.user.id}>', '').strip()
+        
+        if not content:
+            content = "こんにちは" # 空メンションの場合のデフォルト
+
+        try:
+            # Pollinations AI APIを使用
+            # システムプロンプト的な役割をURLに埋め込む工夫
+            prompt = f"あなたはひろやの彼女です: {content}"
+            # URLエンコードはrequestsが自動である程度やってくれるが、基本はURLパスとして渡す
+            # Pollinationsのtext APIは /prompt となる
+            response = requests.get(f"https://text.pollinations.ai/{prompt}")
+            
+            if response.status_code == 200:
+                reply_text = response.text
+                await message.reply(reply_text)
+            else:
+                await message.reply("ごめん、ちょっと調子悪いみたい（APIエラー）")
+        
+        except Exception as e:
+            print(f"AI Error: {e}")
+            await message.reply("エラー起きちゃった。ひろやに直してもらって？")
+
+    # これがないと他のコマンド(!joinなど)が動かなくなるので必須
+    await bot.process_commands(message)
 
 keep_alive()
 bot.run(TOKEN)
