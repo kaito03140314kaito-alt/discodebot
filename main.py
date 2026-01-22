@@ -5,6 +5,7 @@ import os
 from keep_alive import keep_alive
 import glob
 import requests
+import yt_dlp
 
 # 環境変数から設定を読み込み
 TOKEN = os.environ['DISCORD_TOKEN']
@@ -77,28 +78,61 @@ async def join(ctx):
     await ctx.send("接続しました！")
 
 @bot.command()
-async def play(ctx):
-    """同じフォルダにある音声ファイルを再生します"""
+async def play(ctx, url: str = None):
+    """YouTubeのURLまたは同じフォルダにある音声ファイルを再生します"""
     if ctx.voice_client is None:
         await ctx.send("まだボイスチャンネルに入っていません。`!join`で呼んでください。")
         return
 
-    # カレントディレクトリのmp3やwavを探す
-    files = glob.glob("*.mp3") + glob.glob("*.wav") + glob.glob("*.m4a")
-    
-    if not files:
-        await ctx.send("再生できる音声ファイルが見つかりませんでした。(mp3, wav, m4a)")
-        return
-    
-    # 最初に見つかったファイルを再生
-    source_file = files[0]
-    
     # 再生中なら止める
     if ctx.voice_client.is_playing():
         ctx.voice_client.stop()
 
-    ctx.voice_client.play(discord.FFmpegPCMAudio(source_file))
-    await ctx.send(f"再生しています: `{source_file}`")
+    if url:
+        # YouTube再生処理
+        await ctx.send("読み込み中...")
+        
+        # yt-dlpのオプション
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+        }
+        
+        # FFmpegのオプション（ストリーミング用）
+        ffmpeg_options = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': '-vn',
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                audio_url = info['url']
+                title = info.get('title', 'Unknown Title')
+            
+            source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
+            ctx.voice_client.play(source)
+            await ctx.send(f"再生しています: **{title}**")
+            
+        except Exception as e:
+            await ctx.send(f"エラーが発生しました: {e}")
+            print(f"Play Error: {e}")
+            
+    else:
+        # 既存のローカルファイル再生処理
+        # カレントディレクトリのmp3やwavを探す
+        files = glob.glob("*.mp3") + glob.glob("*.wav") + glob.glob("*.m4a")
+        
+        if not files:
+            await ctx.send("再生できる音声ファイルが見つかりませんでした。(mp3, wav, m4a)")
+            return
+        
+        # 最初に見つかったファイルを再生
+        source_file = files[0]
+        
+        ctx.voice_client.play(discord.FFmpegPCMAudio(source_file))
+        await ctx.send(f"再生しています: `{source_file}`")
 
 @bot.command()
 async def stop(ctx):
